@@ -1,0 +1,19 @@
+SpacemiT MCP SDK Component
+Copyright 2026 SpacemiT (Hangzhou) Technology Co. Ltd.
+
+This product includes software developed at
+SpacemiT (Hangzhou) Technology Co. Ltd. (https://www.spacemit.com/).
+
+---------------------------------------------------------------------------
+Third-party Software Notices:
+---------------------------------------------------------------------------
+
+This product contains portions of the following third-party software:
+
+1. nlohmann/json (https://github.com/nlohmann/json)
+   Copyright (c) 2013-2026 Niels Lohmann
+   Licensed under the MIT License.
+
+2. libcurl (https://curl.se/)
+   Copyright (c) 1996-2026 Daniel Stenberg
+   Licensed under the MIT License.

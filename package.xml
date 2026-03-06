@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>mcp</name>
+  <version>0.1.0</version>
+  <description>Model Context Protocol client for tool use and context (libcurl, nlohmann-json)</description>
+  <system_depend check="pkg-config --exists libcurl">libcurl4-openssl-dev</system_depend>
+  <system_depend check="test -f /usr/include/nlohmann/json.hpp || pkg-config --exists nlohmann_json">nlohmann-json3-dev</system_depend>
+
+  <export>
+    <build_type>cmake</build_type>
+  </export>
+</package>

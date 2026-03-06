@@ -1,0 +1,21 @@
+{
+  "backend": "llama",
+  "url": "http://localhost:8080",
+  "model": "qwen2.5:7b",
+  "timeout": 120,
+  "system_prompt": "你是一个智能助手，可以使用工具帮助用户。请用中文回复。",
+  "servers": [
+    {
+      "name": "Calculator",
+      "type": "stdio",
+      "command": "python3",
+      "args": ["examples/services/calculator/stdio_server.py"]
+    },
+    {
+      "name": "TimeService",
+      "type": "stdio",
+      "command": "python3",
+      "args": ["examples/services/time/stdio_server.py"]
+    }
+  ]
+}

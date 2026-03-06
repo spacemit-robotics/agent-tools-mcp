@@ -1,0 +1,10 @@
+{
+  "backend": "llama",
+  "url": "http://localhost:8080",
+  "model": "qwen3:0.6b",
+  "timeout": 120,
+  "system_prompt": "你是一个智能助手，可以使用工具帮助用户。请用中文回复。",
+  "registry_url": "http://127.0.0.1:9000/mcp/services",
+  "registry_poll_interval": 5,
+  "servers": []
+}

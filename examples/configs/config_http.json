@@ -1,0 +1,24 @@
+{
+  "backend": "llama",
+  "url": "http://localhost:8080",
+  "model": "qwen3:8b",
+  "timeout": 120,
+  "system_prompt": "你是一个智能助手，可以使用工具帮助用户。请用中文回复。",
+  "servers": [
+    {
+      "name": "Calculator",
+      "type": "http",
+      "url": "http://localhost:8001/mcp"
+    },
+    {
+      "name": "TimeService",
+      "type": "http",
+      "url": "http://localhost:8002/mcp"
+    },
+    {
+      "name": "SystemMonitor",
+      "type": "http",
+      "url": "http://localhost:8003/mcp"
+    }
+  ]
+}
