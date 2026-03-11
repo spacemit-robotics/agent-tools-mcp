@@ -7,6 +7,7 @@
  * MCPManager 实现
  */
 
+#include <algorithm>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -81,41 +82,52 @@ public:
     }
 
     bool removeServer(const std::string& name) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stopServerInternal(name);
-        configs_.erase(name);
+        auto client = detachServer(name, true);
+        if (client) {
+            client->shutdown();
+        }
         return true;
     }
 
     bool startServer(const std::string& name) {
-        std::lock_guard<std::mutex> lock(mutex_);
         return startServerInternal(name);
     }
 
     void stopServer(const std::string& name) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stopServerInternal(name);
+        auto client = detachServer(name, false);
+        if (client) {
+            client->shutdown();
+        }
     }
 
     void startAll() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        for (const auto& [name, cfg] : configs_) {
+        std::vector<std::string> serverNames;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            for (const auto& [name, cfg] : configs_) {
+                serverNames.push_back(name);
+            }
+        }
+        for (const auto& name : serverNames) {
             startServerInternal(name);
         }
-        // 启动后台重连线程
         startReconnectThread();
     }
 
     void stopAll() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        for (auto& [name, client] : clients_) {
+        std::map<std::string, std::shared_ptr<MCPClient>> clientsToStop;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            clientsToStop.swap(clients_);
+            toolRoutes_.clear();
+            allTools_.clear();
+        }
+
+        for (auto& [name, client] : clientsToStop) {
             if (client) {
                 client->shutdown();
             }
         }
-        clients_.clear();
-        toolRoutes_.clear();
-        allTools_.clear();
     }
 
     bool waitForAnyServer(std::chrono::milliseconds timeout) {
@@ -169,26 +181,32 @@ public:
     }
 
     ToolResult callTool(const std::string& toolName, const json& args) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::shared_ptr<MCPClient> client;
+        std::string serverName;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
 
-        auto routeIt = toolRoutes_.find(toolName);
-        if (routeIt == toolRoutes_.end()) {
-            ToolResult result;
-            result.success = false;
-            result.error = "Tool not found: " + toolName;
-            return result;
+            auto routeIt = toolRoutes_.find(toolName);
+            if (routeIt == toolRoutes_.end()) {
+                ToolResult result;
+                result.success = false;
+                result.error = "Tool not found: " + toolName;
+                return result;
+            }
+
+            serverName = routeIt->second;
+            auto clientIt = clients_.find(serverName);
+            if (clientIt == clients_.end() || !clientIt->second) {
+                ToolResult result;
+                result.success = false;
+                result.error = "Server not connected: " + serverName;
+                return result;
+            }
+
+            client = clientIt->second;
         }
 
-        const std::string& serverName = routeIt->second;
-        auto clientIt = clients_.find(serverName);
-        if (clientIt == clients_.end() || !clientIt->second) {
-            ToolResult result;
-            result.success = false;
-            result.error = "Server not connected: " + serverName;
-            return result;
-        }
-
-        return clientIt->second->callTool(toolName, args);
+        return client->callTool(toolName, args);
     }
 
     std::string findServerForTool(const std::string& toolName) const {
@@ -279,7 +297,7 @@ public:
 private:
     mutable std::mutex mutex_;
     std::map<std::string, ServerConfigInternal> configs_;
-    std::map<std::string, std::unique_ptr<MCPClient>> clients_;
+    std::map<std::string, std::shared_ptr<MCPClient>> clients_;
     std::map<std::string, std::string> toolRoutes_;  // tool_name -> server_name
     std::vector<Tool> allTools_;
     ServerEventHandler serverEventHandler_;
@@ -288,6 +306,122 @@ private:
     // 后台重连线程
     std::thread reconnectThread_;
     std::atomic<bool> reconnectRunning_{false};
+
+    ClientConfig createClientConfig(const ServerConfigInternal& cfg) const {
+        ClientConfig clientConfig;
+        if (cfg.type == TransportType::Stdio) {
+            clientConfig.requestTimeout = cfg.stdioConfig.requestTimeout;
+        }
+        return clientConfig;
+    }
+
+    std::chrono::milliseconds createStartupTimeout(
+            const ServerConfigInternal& cfg,
+            const ClientConfig& clientConfig) const {
+        if (cfg.type == TransportType::Stdio) {
+            return cfg.stdioConfig.startupTimeout;
+        }
+        return clientConfig.requestTimeout;
+    }
+
+    void replaceServerToolsLocked(const std::string& name, const std::vector<Tool>& tools) {
+        allTools_.erase(
+            std::remove_if(
+                allTools_.begin(),
+                allTools_.end(),
+                [this, &name](const Tool& tool) {
+                    auto routeIt = toolRoutes_.find(tool.name);
+                    return routeIt != toolRoutes_.end() && routeIt->second == name;
+                }),
+            allTools_.end());
+
+        for (auto it = toolRoutes_.begin(); it != toolRoutes_.end(); ) {
+            if (it->second == name) {
+                it = toolRoutes_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
+        for (const auto& tool : tools) {
+            toolRoutes_[tool.name] = name;
+            allTools_.push_back(tool);
+        }
+    }
+
+    void refreshServerTools(const std::string& name) {
+        std::shared_ptr<MCPClient> client;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto clientIt = clients_.find(name);
+            if (clientIt == clients_.end() || !clientIt->second || !clientIt->second->isInitialized()) {
+                return;
+            }
+            client = clientIt->second;
+        }
+
+        auto tools = client->listTools();
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto clientIt = clients_.find(name);
+            if (clientIt == clients_.end() || clientIt->second != client) {
+                return;
+            }
+            replaceServerToolsLocked(name, tools);
+        }
+
+        notifyToolChange();
+    }
+
+    std::shared_ptr<MCPClient> detachServer(const std::string& name, bool removeConfig) {
+        std::shared_ptr<MCPClient> client;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            client = detachServerLocked(name, removeConfig);
+        }
+
+        if (client) {
+            notifyServerEvent(name, ServerState::Disconnected);
+            notifyToolChange();
+        }
+
+        return client;
+    }
+
+    std::shared_ptr<MCPClient> detachServerLocked(const std::string& name, bool removeConfig) {
+        auto it = clients_.find(name);
+        std::shared_ptr<MCPClient> client = (it != clients_.end()) ? it->second : nullptr;
+
+        if (removeConfig) {
+            configs_.erase(name);
+        }
+
+        if (!client) {
+            return nullptr;
+        }
+
+        for (auto toolIt = toolRoutes_.begin(); toolIt != toolRoutes_.end(); ) {
+            if (toolIt->second == name) {
+                for (auto allIt = allTools_.begin(); allIt != allTools_.end(); ) {
+                    if (allIt->name == toolIt->first) {
+                        allIt = allTools_.erase(allIt);
+                    } else {
+                        ++allIt;
+                    }
+                }
+                toolIt = toolRoutes_.erase(toolIt);
+            } else {
+                ++toolIt;
+            }
+        }
+
+        if (it != clients_.end()) {
+            clients_.erase(it);
+        }
+
+        return client;
+    }
 
     void startReconnectThread() {
         if (reconnectRunning_) return;
@@ -298,15 +432,21 @@ private:
                 std::this_thread::sleep_for(std::chrono::seconds(2));
                 if (!reconnectRunning_) break;
 
-                std::lock_guard<std::mutex> lock(mutex_);
-                for (const auto& [name, cfg] : configs_) {
-                    auto it = clients_.find(name);
-                    if (it == clients_.end() || !it->second ||
-                        !it->second->isInitialized()) {
-                        // 尝试重连
-                        notifyServerEvent(name, ServerState::Reconnecting);
-                        startServerInternal(name);
+                std::vector<std::string> reconnectNames;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    for (const auto& [name, cfg] : configs_) {
+                        auto it = clients_.find(name);
+                        if (it == clients_.end() || !it->second ||
+                            !it->second->isInitialized()) {
+                            reconnectNames.push_back(name);
+                        }
                     }
+                }
+
+                for (const auto& name : reconnectNames) {
+                    notifyServerEvent(name, ServerState::Reconnecting);
+                    startServerInternal(name);
                 }
             }
         });
@@ -320,18 +460,21 @@ private:
     }
 
     bool startServerInternal(const std::string& name) {
-        auto cfgIt = configs_.find(name);
-        if (cfgIt == configs_.end()) {
-            return false;
-        }
+        ServerConfigInternal cfg;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto cfgIt = configs_.find(name);
+            if (cfgIt == configs_.end()) {
+                return false;
+            }
 
-        // 已经连接则跳过
-        auto clientIt = clients_.find(name);
-        if (clientIt != clients_.end() && clientIt->second && clientIt->second->isInitialized()) {
-            return true;
-        }
+            auto clientIt = clients_.find(name);
+            if (clientIt != clients_.end() && clientIt->second && clientIt->second->isInitialized()) {
+                return true;
+            }
 
-        const auto& cfg = cfgIt->second;
+            cfg = cfgIt->second;
+        }
 
         // 创建传输层
         std::unique_ptr<Transport> transport;
@@ -343,10 +486,10 @@ private:
             transport = std::make_unique<internal::HttpTransport>(cfg.httpConfig);
         }
 
-        // 创建客户端
-        auto client = std::make_unique<MCPClient>(std::move(transport));
+        ClientConfig clientConfig = createClientConfig(cfg);
+        auto startupTimeout = createStartupTimeout(cfg, clientConfig);
+        auto client = std::make_shared<MCPClient>(std::move(transport), clientConfig);
 
-        // 连接
         if (!client->connect()) {
             notifyServerEvent(name, ServerState::Error);
             return false;
@@ -354,81 +497,85 @@ private:
 
         notifyServerEvent(name, ServerState::Connecting);
 
-        // 等待服务器启动
-        std::this_thread::sleep_for(std::chrono::milliseconds(300));
-
         // 初始化
-        if (!client->initialize()) {
+        if (!client->initialize(startupTimeout)) {
             notifyServerEvent(name, ServerState::Error);
             return false;
         }
 
+        client->onToolsChanged([this, name]() {
+            refreshServerTools(name);
+        });
+
         notifyServerEvent(name, ServerState::Initializing);
 
-        // 获取工具列表
-        auto tools = client->listTools();
-        for (const auto& tool : tools) {
-            toolRoutes_[tool.name] = name;
+        auto tools = client->listTools(startupTimeout);
 
-            // 检查是否已存在
-            bool exists = false;
-            for (const auto& t : allTools_) {
-                if (t.name == tool.name) {
-                    exists = true;
-                    break;
+        std::shared_ptr<MCPClient> oldClient;
+        bool installed = false;
+        bool configRemoved = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto cfgIt = configs_.find(name);
+            if (cfgIt == configs_.end()) {
+                configRemoved = true;
+            } else {
+                auto clientIt = clients_.find(name);
+                if (clientIt != clients_.end() && clientIt->second && clientIt->second->isInitialized()) {
+                    oldClient = clientIt->second;
+                } else {
+                    if (clientIt != clients_.end()) {
+                        oldClient = clientIt->second;
+                    }
+
+                    clients_[name] = client;
+                    replaceServerToolsLocked(name, tools);
+                    installed = true;
                 }
-            }
-            if (!exists) {
-                allTools_.push_back(tool);
             }
         }
 
-        clients_[name] = std::move(client);
+        if (configRemoved) {
+            client->shutdown();
+            return false;
+        }
+
+        if (!installed) {
+            client->shutdown();
+            return true;
+        }
+
+        if (oldClient && oldClient != client) {
+            oldClient->shutdown();
+        }
+
         notifyServerEvent(name, ServerState::Ready);
         notifyToolChange();
 
         return true;
     }
 
-    void stopServerInternal(const std::string& name) {
-        auto it = clients_.find(name);
-        if (it != clients_.end()) {
-            if (it->second) {
-                it->second->shutdown();
-            }
-
-            // 清理工具路由
-            for (auto toolIt = toolRoutes_.begin(); toolIt != toolRoutes_.end(); ) {
-                if (toolIt->second == name) {
-                    // 从 allTools_ 中移除
-                    for (auto allIt = allTools_.begin(); allIt != allTools_.end(); ) {
-                        if (allIt->name == toolIt->first) {
-                            allIt = allTools_.erase(allIt);
-                        } else {
-                            ++allIt;
-                        }
-                    }
-                    toolIt = toolRoutes_.erase(toolIt);
-                } else {
-                    ++toolIt;
-                }
-            }
-
-            clients_.erase(it);
-            notifyServerEvent(name, ServerState::Disconnected);
-            notifyToolChange();
-        }
-    }
-
     void notifyServerEvent(const std::string& name, ServerState state) {
-        if (serverEventHandler_) {
-            serverEventHandler_(name, state);
+        ServerEventHandler handler;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            handler = serverEventHandler_;
+        }
+        if (handler) {
+            handler(name, state);
         }
     }
 
     void notifyToolChange() {
-        if (toolChangeHandler_) {
-            toolChangeHandler_(allTools_);
+        ToolChangeHandler handler;
+        std::vector<Tool> toolsSnapshot;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            handler = toolChangeHandler_;
+            toolsSnapshot = allTools_;
+        }
+        if (handler) {
+            handler(toolsSnapshot);
         }
     }
 };
