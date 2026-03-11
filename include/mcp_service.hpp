@@ -89,6 +89,8 @@ struct StdioConfig {
     std::vector<std::string> args;          // 命令参数
     std::string workingDir;                 // 工作目录（可选）
     std::map<std::string, std::string> env;  // 额外环境变量（可选）
+    std::chrono::milliseconds startupTimeout{30000};  // 启动阶段 initialize/tools/list 超时
+    std::chrono::milliseconds requestTimeout{30000};  // 稳态请求超时
 };
 
 struct UnixSocketConfig {
@@ -158,11 +160,13 @@ struct ServerInfo {
 struct ClientConfig {
     std::string name = "mcp-cpp-client";    // 客户端名称
     std::string version = "1.0.0";          // 客户端版本
-    std::chrono::milliseconds timeout{5000};  // 默认超时
+    std::chrono::milliseconds requestTimeout{5000};  // 默认请求超时
 };
 
 class MCPClient {
 public:
+    using ToolsChangedHandler = std::function<void()>;
+
     explicit MCPClient(std::unique_ptr<Transport> transport, const ClientConfig& config = {});
 
     ~MCPClient();
@@ -176,9 +180,13 @@ public:
     MCPClient& operator=(MCPClient&&) noexcept;
 
     bool connect();
-    bool initialize();
-    std::vector<Tool> listTools();
-    ToolResult callTool(const std::string& name, const json& args);
+    bool initialize(std::chrono::milliseconds timeout = std::chrono::milliseconds::zero());
+    std::vector<Tool> listTools(std::chrono::milliseconds timeout = std::chrono::milliseconds::zero());
+    ToolResult callTool(
+        const std::string& name,
+        const json& args,
+        std::chrono::milliseconds timeout = std::chrono::milliseconds::zero());
+    void onToolsChanged(ToolsChangedHandler handler);
     void shutdown();
 
     // 状态查询
