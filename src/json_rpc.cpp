@@ -17,6 +17,10 @@ namespace internal {
 JsonRpcHandler::JsonRpcHandler(Transport& transport)
     : transport_(transport) {}
 
+JsonRpcHandler::~JsonRpcHandler() {
+    stop();
+}
+
 int JsonRpcHandler::nextId() {
     return ++requestId_;
 }
@@ -25,6 +29,8 @@ json JsonRpcHandler::sendRequest(
         const std::string& method,
         const json& params,
         std::chrono::milliseconds timeout) {
+    start();
+
     int id = nextId();
 
     json request = {
@@ -43,6 +49,8 @@ json JsonRpcHandler::sendRequest(
 }
 
 void JsonRpcHandler::sendNotification(const std::string& method, const json& params) {
+    start();
+
     json notification = {
         {"jsonrpc", "2.0"},
         {"method", method},
@@ -53,29 +61,133 @@ void JsonRpcHandler::sendNotification(const std::string& method, const json& par
     transport_.send(message);
 }
 
+void JsonRpcHandler::setNotificationHandler(NotificationHandler handler) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    notificationHandler_ = std::move(handler);
+}
+
+void JsonRpcHandler::start() {
+    std::lock_guard<std::mutex> lifecycleLock(lifecycleMutex_);
+
+    bool expected = false;
+    if (!running_.compare_exchange_strong(expected, true)) {
+        return;
+    }
+
+    if (readerThread_.joinable()) {
+        readerThread_.join();
+    }
+    if (notificationThread_.joinable()) {
+        notificationThread_.join();
+    }
+
+    readerThread_ = std::thread([this]() { readerLoop(); });
+    notificationThread_ = std::thread([this]() { notificationLoop(); });
+}
+
+void JsonRpcHandler::stop() {
+    std::lock_guard<std::mutex> lifecycleLock(lifecycleMutex_);
+
+    running_.exchange(false);
+
+    responseCv_.notify_all();
+    notificationCv_.notify_all();
+
+    if (readerThread_.joinable()) {
+        readerThread_.join();
+    }
+    if (notificationThread_.joinable()) {
+        notificationThread_.join();
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    responses_.clear();
+    notifications_.clear();
+}
+
 json JsonRpcHandler::readResponse(int expectedId, std::chrono::milliseconds timeout) {
-    auto start = std::chrono::steady_clock::now();
+    std::unique_lock<std::mutex> lock(mutex_);
+    auto deadline = std::chrono::steady_clock::now() + timeout;
 
     while (true) {
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - start);
-        if (elapsed > timeout) {
-            return {{"error", {{"code", -1}, {"message", "Timeout"}}}};
+        auto it = responses_.find(expectedId);
+        if (it != responses_.end()) {
+            json response = std::move(it->second);
+            responses_.erase(it);
+            return response;
         }
 
+        if (!running_ || !transport_.isConnected()) {
+            return {{"error", {{"code", -1}, {"message", "Connection closed"}}}};
+        }
+
+        if (responseCv_.wait_until(lock, deadline) == std::cv_status::timeout) {
+            return {{"error", {{"code", -1}, {"message", "Timeout"}}}};
+        }
+    }
+}
+
+void JsonRpcHandler::readerLoop() {
+    while (running_) {
         std::string line = transport_.receive(std::chrono::milliseconds(100));
         if (line.empty()) {
+            if (!transport_.isConnected()) {
+                break;
+            }
             continue;
         }
 
         try {
-            json response = json::parse(line);
-            if (response.contains("id") && response["id"] == expectedId) {
-                return response;
+            json message = json::parse(line);
+
+            if (message.contains("id")) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                int id = message["id"].get<int>();
+                responses_[id] = std::move(message);
+                responseCv_.notify_all();
+            } else if (message.contains("method")) {
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    notifications_.push_back(std::move(message));
+                }
+                notificationCv_.notify_all();
             }
-            // 忽略不匹配的响应（可能是通知）
         } catch (const json::parse_error&) {
             // 忽略解析错误
+        }
+    }
+
+    running_ = false;
+    responseCv_.notify_all();
+    notificationCv_.notify_all();
+}
+
+void JsonRpcHandler::notificationLoop() {
+    while (true) {
+        NotificationHandler handler;
+        json notification;
+
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            notificationCv_.wait(lock, [this]() {
+                return !running_ || !notifications_.empty();
+            });
+
+            if (!running_ && notifications_.empty()) {
+                break;
+            }
+
+            notification = std::move(notifications_.front());
+            notifications_.pop_front();
+            handler = notificationHandler_;
+        }
+
+        if (handler) {
+            try {
+                handler(notification);
+            } catch (...) {
+                // 后台通知线程不应因上层回调异常直接终止整个进程。
+            }
         }
     }
 }

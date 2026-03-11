@@ -11,7 +11,12 @@
 #define JSON_RPC_H
 
 #include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <map>
+#include <mutex>
 #include <string>
+#include <thread>
 #include "../mcp_service.hpp"
 
 namespace mcp {
@@ -23,7 +28,10 @@ namespace internal {
  */
 class JsonRpcHandler {
 public:
+    using NotificationHandler = std::function<void(const json&)>;
+
     explicit JsonRpcHandler(Transport& transport);
+    ~JsonRpcHandler();
 
     /**
      * 发送请求并等待响应
@@ -45,6 +53,21 @@ public:
     void sendNotification(const std::string& method, const json& params);
 
     /**
+     * 设置通知处理回调
+     */
+    void setNotificationHandler(NotificationHandler handler);
+
+    /**
+     * 启动后台消息循环
+     */
+    void start();
+
+    /**
+     * 停止后台消息循环
+     */
+    void stop();
+
+    /**
      * 获取下一个请求 ID
      */
     int nextId();
@@ -52,6 +75,16 @@ public:
 private:
     Transport& transport_;
     std::atomic<int> requestId_{0};
+    std::atomic<bool> running_{false};
+    mutable std::mutex mutex_;
+    std::condition_variable responseCv_;
+    std::map<int, json> responses_;
+    NotificationHandler notificationHandler_;
+    std::deque<json> notifications_;
+    std::condition_variable notificationCv_;
+    std::mutex lifecycleMutex_;
+    std::thread readerThread_;
+    std::thread notificationThread_;
 
     /**
      * 读取响应
@@ -60,6 +93,9 @@ private:
      * @return 响应 JSON
      */
     json readResponse(int expectedId, std::chrono::milliseconds timeout);
+
+    void readerLoop();
+    void notificationLoop();
 };
 
 }  // namespace internal
