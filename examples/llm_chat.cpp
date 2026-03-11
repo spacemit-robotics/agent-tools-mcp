@@ -49,6 +49,8 @@ struct Config {
         // stdio
         std::string command;
         std::vector<std::string> args;
+        int startup_timeout = 30000;
+        int request_timeout = 30000;
         // socket
         std::string socketPath;
         // http
@@ -500,6 +502,8 @@ Config parseArgs(int argc, char* argv[]) {
 
                             if (entry.type == "stdio") {
                                 entry.command = srv["command"];
+                                entry.startup_timeout = srv.value("startup_timeout", entry.startup_timeout);
+                                entry.request_timeout = srv.value("request_timeout", entry.request_timeout);
                                 if (srv.contains("args")) {
                                     for (const auto& arg : srv["args"]) {
                                         entry.args.push_back(arg);
@@ -588,6 +592,8 @@ int main(int argc, char* argv[]) {
             mcp::StdioConfig sc;
             sc.command = srv.command;
             sc.args = srv.args;
+            sc.startupTimeout = std::chrono::milliseconds(srv.startup_timeout);
+            sc.requestTimeout = std::chrono::milliseconds(srv.request_timeout);
             manager.addStdioServer(srv.name, sc);
             std::cout << "[Server] " << srv.name
                 << " (stdio: " << srv.command << ")" << std::endl;
