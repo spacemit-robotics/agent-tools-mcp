@@ -8,6 +8,7 @@
  */
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,17 +26,24 @@ public:
     Impl(std::unique_ptr<Transport> transport, const ClientConfig& config)
         : transport_(std::move(transport))
         , config_(config)
-        , rpc_(*transport_) {}
+        , rpc_(*transport_) {
+        rpc_.setNotificationHandler([this](const json& message) {
+            handleNotification(message);
+        });
+    }
 
     bool connect() {
         if (connected_) {
             return true;
         }
         connected_ = transport_->connect();
+        if (connected_) {
+            rpc_.start();
+        }
         return connected_;
     }
 
-    bool initialize() {
+    bool initialize(std::chrono::milliseconds timeout) {
         if (initialized_) {
             return true;
         }
@@ -53,7 +61,7 @@ public:
             }}
         };
 
-        auto response = rpc_.sendRequest("initialize", params, config_.timeout);
+        auto response = rpc_.sendRequest("initialize", params, resolveTimeout(timeout));
 
         if (!response.contains("result")) {
             return false;
@@ -76,10 +84,10 @@ public:
         return true;
     }
 
-    std::vector<Tool> listTools() {
+    std::vector<Tool> listTools(std::chrono::milliseconds timeout) {
         std::vector<Tool> tools;
 
-        auto response = rpc_.sendRequest("tools/list", json::object(), config_.timeout);
+        auto response = rpc_.sendRequest("tools/list", json::object(), resolveTimeout(timeout));
 
         if (response.contains("result") && response["result"].contains("tools")) {
             for (const auto& t : response["result"]["tools"]) {
@@ -90,7 +98,7 @@ public:
         return tools;
     }
 
-    ToolResult callTool(const std::string& name, const json& args) {
+    ToolResult callTool(const std::string& name, const json& args, std::chrono::milliseconds timeout) {
         ToolResult result;
 
         json params = {
@@ -98,7 +106,7 @@ public:
             {"arguments", args}
         };
 
-        auto response = rpc_.sendRequest("tools/call", params, config_.timeout);
+        auto response = rpc_.sendRequest("tools/call", params, resolveTimeout(timeout));
 
         if (response.contains("error")) {
             result.success = false;
@@ -128,7 +136,13 @@ public:
         return result;
     }
 
+    void onToolsChanged(ToolsChangedHandler handler) {
+        std::lock_guard<std::mutex> lock(handlerMutex_);
+        toolsChangedHandler_ = std::move(handler);
+    }
+
     void shutdown() {
+        rpc_.stop();
         if (transport_) {
             transport_->disconnect();
         }
@@ -142,12 +156,42 @@ public:
     const std::string& name() const { return config_.name; }
 
 private:
+    std::chrono::milliseconds resolveTimeout(std::chrono::milliseconds timeout) const {
+        if (timeout.count() > 0) {
+            return timeout;
+        }
+        return config_.requestTimeout;
+    }
+
+    void handleNotification(const json& message) {
+        if (!message.contains("method")) {
+            return;
+        }
+
+        const std::string method = message.value("method", "");
+        if (method != "notifications/tools/list_changed") {
+            return;
+        }
+
+        ToolsChangedHandler handler;
+        {
+            std::lock_guard<std::mutex> lock(handlerMutex_);
+            handler = toolsChangedHandler_;
+        }
+
+        if (handler) {
+            handler();
+        }
+    }
+
     std::unique_ptr<Transport> transport_;
     ClientConfig config_;
     internal::JsonRpcHandler rpc_;
     bool connected_ = false;
     bool initialized_ = false;
     ServerInfo serverInfo_;
+    std::mutex handlerMutex_;
+    ToolsChangedHandler toolsChangedHandler_;
 };
 
 // ============================================================================
@@ -166,16 +210,23 @@ bool MCPClient::connect() {
     return impl_->connect();
 }
 
-bool MCPClient::initialize() {
-    return impl_->initialize();
+bool MCPClient::initialize(std::chrono::milliseconds timeout) {
+    return impl_->initialize(timeout);
 }
 
-std::vector<Tool> MCPClient::listTools() {
-    return impl_->listTools();
+std::vector<Tool> MCPClient::listTools(std::chrono::milliseconds timeout) {
+    return impl_->listTools(timeout);
 }
 
-ToolResult MCPClient::callTool(const std::string& name, const json& args) {
-    return impl_->callTool(name, args);
+ToolResult MCPClient::callTool(
+    const std::string& name,
+    const json& args,
+    std::chrono::milliseconds timeout) {
+    return impl_->callTool(name, args, timeout);
+}
+
+void MCPClient::onToolsChanged(ToolsChangedHandler handler) {
+    impl_->onToolsChanged(std::move(handler));
 }
 
 void MCPClient::shutdown() {
