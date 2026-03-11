@@ -58,12 +58,7 @@ bool StdioTransport::connect() {
         close(stdinPipe[0]);
         close(stdoutPipe[1]);
 
-        // 重定向 stderr 到 /dev/null
-        int devnull = open("/dev/null", O_WRONLY);
-        if (devnull != -1) {
-            dup2(devnull, STDERR_FILENO);
-            close(devnull);
-        }
+        // 保留子进程 stderr，便于直接观察 gateway/main.py 等 stdio server 的启动报错。
 
         // 切换工作目录
         if (!config_.workingDir.empty()) {
