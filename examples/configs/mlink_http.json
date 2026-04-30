@@ -1,0 +1,14 @@
+{
+  "backend": "llama",
+  "url": "http://127.0.0.1:8080",
+  "model": "qwen2.5:0.5b",
+  "timeout": 120,
+  "system_prompt": "你是一个智能机器人助手，可根据用户指令调用工具。请用中文回复。",
+  "servers": [
+    {
+      "name": "mlink-gateway",
+      "type": "http",
+      "url": "http://127.0.0.1:18765/mcp"
+    }
+  ]
+}
