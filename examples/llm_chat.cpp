@@ -390,7 +390,7 @@ Socket 服务器需要先在另一个终端启动:
     "model": "qwen2.5:7b",
     "servers": [
         {"name": "Calculator", "type": "stdio", "command": "python3",
-        "args": ["examples/services/calculator/stdio_server.py"]},
+            "args": ["examples/services/calculator/stdio_server.py"]},
         {"name": "TimeService", "type": "socket", "path": "/tmp/mcp_time.sock"},
         {"name": "SystemMonitor", "type": "http", "url": "http://localhost:8003/mcp"}
     ]
