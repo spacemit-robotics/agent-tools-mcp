@@ -10,6 +10,7 @@
 #include "../include/internal/json_rpc.h"
 #include <string>
 #include <thread>
+#include <utility>
 
 namespace mcp {
 namespace internal {
