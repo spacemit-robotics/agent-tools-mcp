@@ -361,7 +361,7 @@ LLM 后端选项:
 
 MCP 服务器选项:
     -S, --stdio <name:cmd:args>   添加 stdio 服务器
-                                  name=标识名, cmd=命令, args=参数
+                                name=标识名, cmd=命令, args=参数
                                 例: -S calc:python3:examples/services/calculator/stdio_server.py
     -U, --unix <name:path>        添加 Unix Socket 服务器
                                 例: -U calc:/tmp/mcp_calculator.sock
@@ -376,7 +376,7 @@ MCP 服务器选项:
     -h, --help               显示帮助
 
 注意: stdio 脚本路径相对于执行命令时的工作目录。
-      推荐使用 -c 配置文件方式，避免手动拼接长路径。
+        推荐使用 -c 配置文件方式，避免手动拼接长路径。
 
 Socket 服务器需要先在另一个终端启动:
     python3 examples/services/calculator/socket_server.py  -> /tmp/mcp_calculator.sock
@@ -390,7 +390,7 @@ Socket 服务器需要先在另一个终端启动:
     "model": "qwen2.5:7b",
     "servers": [
         {"name": "Calculator", "type": "stdio", "command": "python3",
-         "args": ["examples/services/calculator/stdio_server.py"]},
+            "args": ["examples/services/calculator/stdio_server.py"]},
         {"name": "TimeService", "type": "socket", "path": "/tmp/mcp_time.sock"},
         {"name": "SystemMonitor", "type": "http", "url": "http://localhost:8003/mcp"}
     ]
