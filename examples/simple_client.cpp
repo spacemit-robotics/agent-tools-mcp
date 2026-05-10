@@ -27,7 +27,8 @@ int main(int argc, char* argv[]) {
         std::cout
             << "Usage: " << argv[0] << " [-h] [script_path]\n"
             << "  -h            Show this help message\n"
-            << "  script_path   Path to MCP python server script (default: examples/services/calculator/stdio_server.py)\n";
+            << "  script_path   Path to MCP python server script "
+            << "(default: examples/services/calculator/stdio_server.py)\n";
     };
 
     // RAII 初始化

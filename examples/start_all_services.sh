@@ -8,7 +8,7 @@
 #
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR" || exit
 
 # PID 文件目录
 PID_DIR="/tmp/mcp_services"
