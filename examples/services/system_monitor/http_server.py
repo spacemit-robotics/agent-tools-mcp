@@ -26,6 +26,7 @@ import os
 import platform
 import atexit
 from datetime import datetime
+from functools import wraps
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 
@@ -66,12 +67,11 @@ def format_bytes(bytes_val: int) -> str:
 
 def require_psutil(func):
     """检查 psutil 是否可用的装饰器"""
+    @wraps(func)
     def wrapper(*args, **kwargs):
         if not HAS_PSUTIL:
             return "错误: 需要安装 psutil 才能使用此功能\n请运行: pip install psutil"
         return func(*args, **kwargs)
-    wrapper.__name__ = func.__name__
-    wrapper.__doc__ = func.__doc__
     return wrapper
 
 
@@ -81,7 +81,7 @@ def require_psutil(func):
 
 @mcp.tool()
 @require_psutil
-def get_cpu_info(**kwargs) -> str:
+def get_cpu_info() -> str:
     """获取 CPU 详细信息，包括使用率、核心数、频率"""
     cpu_percent = psutil.cpu_percent(interval=0.5)
     cpu_count = psutil.cpu_count(logical=False)
@@ -101,7 +101,7 @@ def get_cpu_info(**kwargs) -> str:
 
 @mcp.tool()
 @require_psutil
-def get_memory_info(**kwargs) -> str:
+def get_memory_info() -> str:
     """获取内存使用信息，包括物理内存和 Swap"""
     mem = psutil.virtual_memory()
     swap = psutil.swap_memory()
@@ -116,7 +116,7 @@ def get_memory_info(**kwargs) -> str:
 
 @mcp.tool()
 @require_psutil
-def get_disk_info(**kwargs) -> str:
+def get_disk_info() -> str:
     """获取所有磁盘分区的使用信息"""
     partitions = psutil.disk_partitions()
     result = "磁盘信息:\n"
@@ -138,7 +138,7 @@ def get_disk_info(**kwargs) -> str:
 
 @mcp.tool()
 @require_psutil
-def get_network_info(**kwargs) -> str:
+def get_network_info() -> str:
     """获取网络接口信息和流量统计"""
     net_io = psutil.net_io_counters()
     net_if = psutil.net_if_addrs()
@@ -162,7 +162,7 @@ def get_network_info(**kwargs) -> str:
 
 @mcp.tool()
 @require_psutil
-def get_top_processes(limit: int = 5, sort_by: str = "memory", **kwargs) -> str:
+def get_top_processes(limit: int = 5, sort_by: str = "memory") -> str:
     """
     获取资源占用最高的进程列表
 
@@ -193,7 +193,7 @@ def get_top_processes(limit: int = 5, sort_by: str = "memory", **kwargs) -> str:
 
 @mcp.tool()
 @require_psutil
-def get_system_overview(**kwargs) -> str:
+def get_system_overview() -> str:
     """获取系统概览，包括运行时长、资源使用率等"""
     boot_time = psutil.boot_time()
     boot_dt = datetime.fromtimestamp(boot_time)
@@ -211,7 +211,7 @@ def get_system_overview(**kwargs) -> str:
 
 
 @mcp.tool()
-def get_load_average(**kwargs) -> str:
+def get_load_average() -> str:
     """获取系统负载（1/5/15 分钟平均值）"""
     try:
         load = os.getloadavg()
